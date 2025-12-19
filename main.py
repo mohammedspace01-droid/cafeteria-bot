@@ -18,8 +18,8 @@ from telegram.ext import (
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_GROUP_ID = -1003593388052
 
-WINDOW_SECONDS = 4 * 60 * 60          # 4 ساعات تجميع
-CLEANUP_SECONDS = 48 * 60 * 60        # 48 ساعة حذف نهائي
+WINDOW_SECONDS = 4 * 60 * 60          # 4 ساعات سيشن
+CLEANUP_SECONDS = 48 * 60 * 60        # حذف بعد 48 ساعة
 DATA_FILE = "data.json"
 
 USERS = {}
@@ -103,10 +103,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = user.id
     ts = now()
 
-    # إنشاء سيشن جديدة لو مش موجودة أو انتهت
-    is_new_session = uid not in USERS or ts - USERS[uid]["start_time"] > WINDOW_SECONDS
-
-    if is_new_session:
+    # لو مفيش سيشن أو السيشن انتهت → نبدأ واحدة جديدة
+    if uid not in USERS or ts - USERS[uid]["start_time"] > WINDOW_SECONDS:
         USERS[uid] = {
             "name": user.full_name,
             "username": user.username,
@@ -126,7 +124,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(
             "أهلاً بيك 👋\n"
-            "اختار مجموعتك علشان نكمّل مع بعض 👇"
+            "نكمّل على نفس الاستفسار، اختار مجموعتك 👇"
         )
 
     await send_group_buttons(update)
@@ -167,11 +165,12 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = user.id
     ts = now()
 
+    # لو السيشن انتهت → نبدأ واحدة جديدة ونطلب المجموعة
     if uid not in USERS or ts - USERS[uid]["start_time"] > WINDOW_SECONDS:
         USERS[uid] = {
             "name": user.full_name,
             "username": user.username,
-            "group": None,
+            "group": None,          # ⬅️ لازم يختارها تاني
             "start_time": ts,
             "messages": [],
             "admin_message_id": None,
@@ -187,9 +186,11 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_group_buttons(update)
         return
 
+    # لسه مختارش مجموعة
     if USERS[uid]["group"] is None:
         return
 
+    # تسجيل الرسالة
     msg = update.message
     if msg.text:
         content = msg.text
@@ -206,6 +207,7 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     USERS[uid]["replied"] = False
     save_data()
 
+    # إرسال / تحديث رسالة الأدمن
     if USERS[uid]["admin_message_id"] is None:
         sent = await context.bot.send_message(
             chat_id=ADMIN_GROUP_ID,
@@ -249,6 +251,7 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             u["replied"] = True
             save_data()
 
+            # إشعار كل ردين
             if u["reply_count"] % 2 == 0:
                 await context.bot.send_message(
                     chat_id=uid,
