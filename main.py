@@ -94,12 +94,42 @@ def build_admin_message(uid):
 # ================== الطالب ==================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.chat.type == "private":
+    if update.message.chat.type != "private":
+        return
+
+    cleanup_old_users()
+
+    user = update.message.from_user
+    uid = user.id
+    ts = now()
+
+    # إنشاء سيشن جديدة لو مش موجودة أو انتهت
+    is_new_session = uid not in USERS or ts - USERS[uid]["start_time"] > WINDOW_SECONDS
+
+    if is_new_session:
+        USERS[uid] = {
+            "name": user.full_name,
+            "username": user.username,
+            "group": None,
+            "start_time": ts,
+            "messages": [],
+            "admin_message_id": None,
+            "replied": False,
+            "reply_count": 0,
+        }
+        save_data()
+
         await update.message.reply_text(
-            "أهلاً بيك 👋\n"
+            "خلّينا نبدأ استفسار جديد 👌\n"
             "اختار مجموعتك علشان نقدر نساعدك أسرع 👇"
         )
-        await send_group_buttons(update)
+    else:
+        await update.message.reply_text(
+            "أهلاً بيك 👋\n"
+            "اختار مجموعتك علشان نكمّل مع بعض 👇"
+        )
+
+    await send_group_buttons(update)
 
 async def send_group_buttons(update: Update):
     keyboard = [[
@@ -149,6 +179,11 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "reply_count": 0,
         }
         save_data()
+
+        await update.message.reply_text(
+            "خلّينا نبدأ استفسار جديد 👌\n"
+            "اختار مجموعتك الأول 👇"
+        )
         await send_group_buttons(update)
         return
 
