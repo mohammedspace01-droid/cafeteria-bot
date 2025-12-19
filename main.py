@@ -66,8 +66,10 @@ def cleanup_old_users():
 def now():
     return int(time.time())
 
+# ⏰ توقيت مصر
 def fmt(ts):
-    return time.strftime("%I:%M %p", time.localtime(ts))
+    egypt_ts = ts + (2 * 60 * 60)  # UTC +2
+    return time.strftime("%I:%M %p", time.localtime(egypt_ts))
 
 def build_admin_message(uid):
     u = USERS[uid]
@@ -102,7 +104,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     ts = now()
 
-    # سيشن جديد أو منتهي
     if uid not in USERS or ts - USERS[uid]["start_time"] > WINDOW_SECONDS:
         USERS[uid] = {
             "name": update.message.from_user.full_name,
@@ -123,7 +124,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_group_buttons(update)
         return
 
-    # سيشن شغال
     await update.message.reply_text(
         "👋 رجعنا نكمّل\n"
         "ابعت استفسارك مباشرة."
@@ -148,7 +148,6 @@ async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ts = now()
     key = query.data.split("_")[1]
 
-    # ✅ تأمين السيشن (حل المشكلة الأساسية)
     if uid not in USERS:
         USERS[uid] = {
             "name": query.from_user.full_name,
@@ -184,7 +183,6 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start(update, context)
         return
 
-    # لو السيشن انتهى
     if ts - USERS[uid]["start_time"] > WINDOW_SECONDS:
         USERS[uid]["group"] = None
         USERS[uid]["messages"] = []
@@ -202,14 +200,35 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = update.message
+
+    # ====== المرفقات (قابلة للفتح) ======
     if msg.text:
         content = msg.text
+
     elif msg.document:
         content = f"📎 ملف: {msg.document.file_name}"
+        await context.bot.copy_message(
+            chat_id=ADMIN_GROUP_ID,
+            from_chat_id=uid,
+            message_id=msg.message_id
+        )
+
     elif msg.photo:
         content = "🖼️ صورة"
+        await context.bot.copy_message(
+            chat_id=ADMIN_GROUP_ID,
+            from_chat_id=uid,
+            message_id=msg.message_id
+        )
+
     elif msg.voice:
         content = "🎤 رسالة صوتية"
+        await context.bot.copy_message(
+            chat_id=ADMIN_GROUP_ID,
+            from_chat_id=uid,
+            message_id=msg.message_id
+        )
+
     else:
         content = "📩 مرفق"
 
@@ -275,6 +294,20 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text("✅ تم إرسال الرد للطالب")
             break
 
+# ================== داش بورد الأدمن ==================
+
+async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.chat.id != ADMIN_GROUP_ID:
+        return
+
+    await update.message.reply_text(
+        "📊 لوحة التحكم – Cafeteria\n\n"
+        "🔎 استخدم الشباك:\n"
+        "#لم_يتم_الرد\n"
+        "#تم_الرد\n\n"
+        "كل استفسار متجمّع في رسالة واحدة."
+    )
+
 # ================== تشغيل ==================
 
 def main():
@@ -283,6 +316,7 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler(["dashboard", "ابدا"], admin_dashboard))
     app.add_handler(CallbackQueryHandler(set_group))
     app.add_handler(
         MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, handle_private)
