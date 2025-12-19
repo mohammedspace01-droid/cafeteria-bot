@@ -15,6 +15,8 @@ from telegram.ext import (
     filters,
 )
 
+# ================== إعدادات ==================
+
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_GROUP_ID = -1003593388052
 
@@ -49,14 +51,14 @@ def save_data():
 
 def cleanup_old_users():
     now_ts = int(time.time())
-    removed = False
+    changed = False
 
     for uid in list(USERS.keys()):
         if now_ts - USERS[uid]["start_time"] > CLEANUP_SECONDS:
             del USERS[uid]
-            removed = True
+            changed = True
 
-    if removed:
+    if changed:
         save_data()
 
 # ================== أدوات ==================
@@ -97,17 +99,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type != "private":
         return
 
-    cleanup_old_users()
-
-    user = update.message.from_user
-    uid = user.id
+    uid = update.message.from_user.id
     ts = now()
 
-    # لو مفيش سيشن أو السيشن انتهت → نبدأ واحدة جديدة
+    # سيشن جديد أو منتهي
     if uid not in USERS or ts - USERS[uid]["start_time"] > WINDOW_SECONDS:
         USERS[uid] = {
-            "name": user.full_name,
-            "username": user.username,
+            "name": update.message.from_user.full_name,
+            "username": update.message.from_user.username,
             "group": None,
             "start_time": ts,
             "messages": [],
@@ -118,16 +117,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_data()
 
         await update.message.reply_text(
-            "خلّينا نبدأ استفسار جديد 👌\n"
+            "أهلاً بيك 👋\n"
             "اختار مجموعتك علشان نقدر نساعدك أسرع 👇"
         )
-    else:
-        await update.message.reply_text(
-            "أهلاً بيك 👋\n"
-            "نكمّل على نفس الاستفسار، اختار مجموعتك 👇"
-        )
+        await send_group_buttons(update)
+        return
 
-    await send_group_buttons(update)
+    # سيشن شغال
+    await update.message.reply_text(
+        "👋 رجعنا نكمّل\n"
+        "ابعت استفسارك مباشرة."
+    )
 
 async def send_group_buttons(update: Update):
     keyboard = [[
@@ -142,12 +142,27 @@ async def send_group_buttons(update: Update):
 
 async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    await query.answer("تم الاختيار ✅")
 
     uid = query.from_user.id
+    ts = now()
     key = query.data.split("_")[1]
 
+    # ✅ تأمين السيشن (حل المشكلة الأساسية)
+    if uid not in USERS:
+        USERS[uid] = {
+            "name": query.from_user.full_name,
+            "username": query.from_user.username,
+            "group": None,
+            "start_time": ts,
+            "messages": [],
+            "admin_message_id": None,
+            "replied": False,
+            "reply_count": 0,
+        }
+
     USERS[uid]["group"] = GROUP_MAP[key]
+    USERS[uid]["start_time"] = ts
     save_data()
 
     await query.edit_message_text(
@@ -165,32 +180,27 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = user.id
     ts = now()
 
-    # لو السيشن انتهت → نبدأ واحدة جديدة ونطلب المجموعة
-    if uid not in USERS or ts - USERS[uid]["start_time"] > WINDOW_SECONDS:
-        USERS[uid] = {
-            "name": user.full_name,
-            "username": user.username,
-            "group": None,          # ⬅️ لازم يختارها تاني
-            "start_time": ts,
-            "messages": [],
-            "admin_message_id": None,
-            "replied": False,
-            "reply_count": 0,
-        }
+    if uid not in USERS:
+        await start(update, context)
+        return
+
+    # لو السيشن انتهى
+    if ts - USERS[uid]["start_time"] > WINDOW_SECONDS:
+        USERS[uid]["group"] = None
+        USERS[uid]["messages"] = []
+        USERS[uid]["admin_message_id"] = None
+        USERS[uid]["replied"] = False
+        USERS[uid]["reply_count"] = 0
+        USERS[uid]["start_time"] = ts
         save_data()
 
-        await update.message.reply_text(
-            "خلّينا نبدأ استفسار جديد 👌\n"
-            "اختار مجموعتك الأول 👇"
-        )
         await send_group_buttons(update)
         return
 
-    # لسه مختارش مجموعة
     if USERS[uid]["group"] is None:
+        await send_group_buttons(update)
         return
 
-    # تسجيل الرسالة
     msg = update.message
     if msg.text:
         content = msg.text
@@ -207,7 +217,6 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     USERS[uid]["replied"] = False
     save_data()
 
-    # إرسال / تحديث رسالة الأدمن
     if USERS[uid]["admin_message_id"] is None:
         sent = await context.bot.send_message(
             chat_id=ADMIN_GROUP_ID,
@@ -251,7 +260,6 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             u["replied"] = True
             save_data()
 
-            # إشعار كل ردين
             if u["reply_count"] % 2 == 0:
                 await context.bot.send_message(
                     chat_id=uid,
