@@ -201,7 +201,6 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = update.message
 
-    # ====== المرفقات (قابلة للفتح) ======
     if msg.text:
         content = msg.text
 
@@ -308,6 +307,14 @@ async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "كل استفسار متجمّع في رسالة واحدة."
     )
 
+async def admin_dashboard_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.chat.id != ADMIN_GROUP_ID:
+        return
+
+    text = update.message.text.strip().lower()
+    if text in ["start", "ابدا", "ابدأ"]:
+        await admin_dashboard(update, context)
+
 # ================== تشغيل ==================
 
 def main():
@@ -316,13 +323,17 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler(["dashboard", "ابدا"], admin_dashboard))
+    app.add_handler(CommandHandler("dashboard", admin_dashboard))
     app.add_handler(CallbackQueryHandler(set_group))
+
     app.add_handler(
         MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, handle_private)
     )
     app.add_handler(
         MessageHandler(filters.ChatType.SUPERGROUP & filters.REPLY, handle_admin_reply)
+    )
+    app.add_handler(
+        MessageHandler(filters.ChatType.SUPERGROUP & filters.TEXT, admin_dashboard_text)
     )
 
     app.run_polling()
