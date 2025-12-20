@@ -21,8 +21,8 @@ from telegram.ext import (
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_GROUP_ID = -1003593388052
 
-SESSION_SECONDS = 4 * 60 * 60          # 4 ساعات
-USER_LIFETIME = 48 * 60 * 60           # 48 ساعة
+SESSION_SECONDS = 4 * 60 * 60          # 4 ساعات استفسار
+USER_LIFETIME = 48 * 60 * 60           # 48 ساعة تخزين
 DATA_FILE = "data.json"
 
 EGY_TZ = timezone(timedelta(hours=2))
@@ -35,7 +35,7 @@ GROUP_MAP = {
 
 USERS = {}
 
-# ================== أدوات الوقت ==================
+# ================== أدوات وقت ==================
 
 def now():
     return int(time.time())
@@ -43,7 +43,7 @@ def now():
 def fmt(ts):
     return datetime.fromtimestamp(ts, EGY_TZ).strftime("%I:%M %p")
 
-# ================== التخزين ==================
+# ================== تخزين ==================
 
 def load_data():
     global USERS
@@ -67,7 +67,7 @@ def cleanup():
     if changed:
         save_data()
 
-# ================== رسالة الأدمن ==================
+# ================== بناء رسالة الأدمن ==================
 
 def build_admin_message(uid):
     u = USERS[uid]
@@ -193,7 +193,7 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     USERS[uid]["replied"] = False
     save_data()
 
-    # رسالة الجذر
+    # إنشاء رسالة الأساس مرة واحدة
     if USERS[uid]["admin_root"] is None:
         root = await context.bot.send_message(
             chat_id=ADMIN_GROUP_ID,
@@ -202,13 +202,13 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
         USERS[uid]["admin_root"] = root.message_id
         save_data()
 
+    # إرسال المحتوى Reply على رسالة الأساس
     reply_to = USERS[uid]["admin_root"]
 
-    # إرسال المحتوى
     if msg.text:
         await context.bot.send_message(
             chat_id=ADMIN_GROUP_ID,
-            text=f"📝 رسالة من الطالب:\n\n{msg.text}",
+            text=msg.text,
             reply_to_message_id=reply_to,
         )
     elif msg.photo:
@@ -222,14 +222,14 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_document(
             chat_id=ADMIN_GROUP_ID,
             document=msg.document.file_id,
-            caption=f"📎 ملف من الطالب: {msg.document.file_name}",
+            caption=msg.document.file_name,
             reply_to_message_id=reply_to,
         )
     elif msg.voice:
         await context.bot.send_voice(
             chat_id=ADMIN_GROUP_ID,
             voice=msg.voice.file_id,
-            caption="🎤 رسالة صوتية من الطالب",
+            caption="🎤 رسالة صوتية",
             reply_to_message_id=reply_to,
         )
 
@@ -249,15 +249,10 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     cleanup()
 
+    replied_id = update.message.reply_to_message.message_id
+
     for uid, u in USERS.items():
-        root_id = u["admin_root"]
-        msg = update.message.reply_to_message
-
-        # نطلع لأصل الـ Thread
-        while msg.reply_to_message:
-            msg = msg.reply_to_message
-
-        if msg.message_id == root_id:
+        if u["admin_root"] == replied_id or replied_id > u["admin_root"]:
             await context.bot.copy_message(
                 chat_id=uid,
                 from_chat_id=ADMIN_GROUP_ID,
@@ -270,7 +265,7 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
             await context.bot.edit_message_text(
                 chat_id=ADMIN_GROUP_ID,
-                message_id=root_id,
+                message_id=u["admin_root"],
                 text=build_admin_message(uid),
             )
 
@@ -294,14 +289,6 @@ async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🟡 لم يتم الرد: {pending}"
     )
 
-async def dashboard_trigger(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.chat.id != ADMIN_GROUP_ID:
-        return
-
-    text = update.message.text.strip().lower()
-    if text in ["start", "ابدا", "ابدأ", "dashboard", "داش بورد"]:
-        await dashboard(update, context)
-
 # ================== تشغيل ==================
 
 def main():
@@ -311,10 +298,6 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("dashboard", dashboard))
     app.add_handler(CallbackQueryHandler(set_group))
-
-    app.add_handler(
-        MessageHandler(filters.ChatType.SUPERGROUP & filters.TEXT & ~filters.COMMAND, dashboard_trigger)
-    )
     app.add_handler(
         MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, handle_private)
     )
