@@ -1,12 +1,7 @@
 import os
 import time
 import json
-from datetime import datetime, timedelta, timezone
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
@@ -16,16 +11,16 @@ from telegram.ext import (
     filters,
 )
 
-# ================== الإعدادات ==================
+# ================== إعدادات ==================
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_GROUP_ID = -1003593388052
 
-SESSION_SECONDS = 4 * 60 * 60        # 4 ساعات
-MEMORY_SECONDS = 48 * 60 * 60         # 48 ساعة
+WINDOW_SECONDS = 4 * 60 * 60        # 4 ساعات سيشن
+CLEANUP_SECONDS = 48 * 60 * 60      # حذف بعد يومين
 DATA_FILE = "data.json"
 
-TZ_EGYPT = timezone(timedelta(hours=2))
+USERS = {}
 
 GROUP_MAP = {
     "A": "المجموعة أ",
@@ -33,7 +28,7 @@ GROUP_MAP = {
     "C": "المجموعة ج",
 }
 
-USERS = {}
+EGYPT_OFFSET = 2 * 60 * 60  # توقيت مصر
 
 # ================== حفظ / تحميل ==================
 
@@ -41,8 +36,7 @@ def load_data():
     global USERS
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-            USERS = {int(k): v for k, v in raw.items()}
+            USERS = {int(k): v for k, v in json.load(f).items()}
     except:
         USERS = {}
 
@@ -56,20 +50,25 @@ def now():
     return int(time.time())
 
 def fmt(ts):
-    return datetime.fromtimestamp(ts, TZ_EGYPT).strftime("%I:%M %p")
+    return time.strftime("%I:%M %p", time.localtime(ts + EGYPT_OFFSET))
 
-def cleanup():
+def cleanup_old_users():
     t = now()
-    changed = False
+    removed = False
     for uid in list(USERS.keys()):
-        if t - USERS[uid]["start_time"] > MEMORY_SECONDS:
+        if t - USERS[uid]["start_time"] > CLEANUP_SECONDS:
             del USERS[uid]
-            changed = True
-    if changed:
+            removed = True
+    if removed:
         save_data()
 
 def build_admin_message(uid):
     u = USERS[uid]
+
+    msgs = "\n".join(
+        f"{i+1}) [{fmt(t)}] {m}"
+        for i, (t, m) in enumerate(u["messages"])
+    )
 
     status = "🟢 #تم_الرد" if u["replied"] else "🟡 #لم_يتم_الرد"
 
@@ -79,9 +78,12 @@ def build_admin_message(uid):
         f"🔗 @{u['username'] if u['username'] else 'غير متاح'}\n"
         f"🆔 ID: {uid}\n"
         f"👥 {u['group']}\n\n"
-        f"📌 الحالة الحالية: {status}\n\n"
-        "↩️ الرد يكون Reply على هذه الرسالة فقط\n"
-        "📎 أي رسالة من الطالب بعدها هتظهر Reply هنا تلقائيًا"
+        "━━━━━━━━━━━━━━\n"
+        "📨 الرسائل:\n"
+        f"{msgs}\n"
+        "━━━━━━━━━━━━━━\n"
+        f"📌 الحالة: {status}\n\n"
+        "↩️ الرد يكون Reply داخل نفس الاستفسار"
     )
 
 # ================== الطالب ==================
@@ -91,18 +93,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     uid = update.message.from_user.id
-    USERS[uid] = {
-        "name": update.message.from_user.full_name,
-        "username": update.message.from_user.username,
-        "group": None,
-        "start_time": now(),
-        "admin_message_id": None,
-        "replied": False,
-    }
-    save_data()
+    ts = now()
 
-    await update.message.reply_text("أهلاً بيك 👋\nاختار مجموعتك 👇")
-    await send_group_buttons(update)
+    if uid not in USERS or ts - USERS[uid]["start_time"] > WINDOW_SECONDS:
+        USERS[uid] = {
+            "name": update.message.from_user.full_name,
+            "username": update.message.from_user.username,
+            "group": None,
+            "start_time": ts,
+            "messages": [],
+            "admin_message_id": None,
+            "replied": False,
+        }
+        save_data()
+
+        await update.message.reply_text("أهلاً بيك 👋\nاختار مجموعتك 👇")
+        await send_group_buttons(update)
+        return
+
+    await update.message.reply_text("ابعت استفسارك مباشرة 👌")
 
 async def send_group_buttons(update: Update):
     keyboard = [[
@@ -127,32 +136,31 @@ async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     USERS[uid]["group"] = GROUP_MAP[key]
     USERS[uid]["start_time"] = now()
-    USERS[uid]["replied"] = False
     save_data()
 
-    await query.edit_message_text(
-        "تمام 👌\nابعت استفسارك (نص / صورة / ملف) وهيوصل فورًا."
-    )
+    await query.edit_message_text("تمام 👌\nابعت استفسارك.")
 
 async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type != "private":
         return
 
-    cleanup()
+    cleanup_old_users()
 
     uid = update.message.from_user.id
-    t = now()
+    ts = now()
 
     if uid not in USERS:
         await start(update, context)
         return
 
-    if t - USERS[uid]["start_time"] > SESSION_SECONDS:
+    if ts - USERS[uid]["start_time"] > WINDOW_SECONDS:
         USERS[uid]["group"] = None
+        USERS[uid]["messages"] = []
         USERS[uid]["admin_message_id"] = None
         USERS[uid]["replied"] = False
-        USERS[uid]["start_time"] = t
+        USERS[uid]["start_time"] = ts
         save_data()
+
         await send_group_buttons(update)
         return
 
@@ -162,26 +170,43 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = update.message
 
-    # أول رسالة = إنشاء استفسار
-    if USERS[uid]["admin_message_id"] is None:
-        sent = await context.bot.send_message(
-            ADMIN_GROUP_ID,
-            build_admin_message(uid)
-        )
-        USERS[uid]["admin_message_id"] = sent.message_id
-        USERS[uid]["replied"] = False
-        save_data()
+    if msg.text:
+        content = msg.text
+    elif msg.document:
+        content = f"📎 {msg.document.file_name}"
+    elif msg.photo:
+        content = "🖼️ صورة"
+    elif msg.voice:
+        content = "🎤 رسالة صوتية"
+    else:
+        content = "📩 مرفق"
 
-    # أي رسالة بعدها = Reply على رسالة الاستفسار
-    await context.bot.copy_message(
-        chat_id=ADMIN_GROUP_ID,
-        from_chat_id=update.message.chat.id,
-        message_id=msg.message_id,
-        reply_to_message_id=USERS[uid]["admin_message_id"]
-    )
-
+    USERS[uid]["messages"].append((ts, content))
     USERS[uid]["replied"] = False
     save_data()
+
+    if USERS[uid]["admin_message_id"] is None:
+        sent = await context.bot.send_message(
+            chat_id=ADMIN_GROUP_ID,
+            text=build_admin_message(uid),
+        )
+        USERS[uid]["admin_message_id"] = sent.message_id
+        save_data()
+    else:
+        await context.bot.edit_message_text(
+            chat_id=ADMIN_GROUP_ID,
+            message_id=USERS[uid]["admin_message_id"],
+            text=build_admin_message(uid),
+        )
+
+    # إرسال المرفق نفسه للجروب
+    if not msg.text:
+        await context.bot.copy_message(
+            chat_id=ADMIN_GROUP_ID,
+            from_chat_id=uid,
+            message_id=msg.message_id,
+            reply_to_message_id=USERS[uid]["admin_message_id"],
+        )
 
 # ================== الأدمن ==================
 
@@ -191,12 +216,16 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not update.message.reply_to_message:
         return
 
-    base_text = update.message.reply_to_message.text
-    if not base_text or "🆔 ID:" not in base_text:
+    # نمشي في سلسلة الـ reply لحد رسالة الاستفسار الأساسية
+    base = update.message.reply_to_message
+    while base.reply_to_message:
+        base = base.reply_to_message
+
+    if not base.text or "🆔 ID:" not in base.text:
         return
 
     try:
-        uid = int(base_text.split("🆔 ID:")[1].split("\n")[0].strip())
+        uid = int(base.text.split("🆔 ID:")[1].split("\n")[0].strip())
     except:
         return
 
@@ -214,10 +243,17 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await update.message.reply_text("✅ تم إرسال الرد للطالب")
 
+    await context.bot.edit_message_text(
+        chat_id=ADMIN_GROUP_ID,
+        message_id=USERS[uid]["admin_message_id"],
+        text=build_admin_message(uid),
+    )
+
 # ================== تشغيل ==================
 
 def main():
     load_data()
+    print("Bot is running...")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -229,7 +265,6 @@ def main():
         MessageHandler(filters.ChatType.SUPERGROUP & filters.REPLY, handle_admin_reply)
     )
 
-    print("Bot is running...")
     app.run_polling()
 
 if __name__ == "__main__":
