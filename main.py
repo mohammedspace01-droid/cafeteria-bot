@@ -1,6 +1,7 @@
 import os
 import time
 import json
+from datetime import datetime, timedelta, timezone
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -15,22 +16,24 @@ from telegram.ext import (
     filters,
 )
 
-# ================== إعدادات ==================
+# ================== الإعدادات ==================
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_GROUP_ID = -1003593388052
 
-WINDOW_SECONDS = 4 * 60 * 60
-CLEANUP_SECONDS = 48 * 60 * 60
+SESSION_SECONDS = 4 * 60 * 60        # 4 ساعات
+MEMORY_SECONDS = 48 * 60 * 60         # 48 ساعة
 DATA_FILE = "data.json"
 
-USERS = {}
+TZ_EGYPT = timezone(timedelta(hours=2))
 
 GROUP_MAP = {
     "A": "المجموعة أ",
     "B": "المجموعة ب",
     "C": "المجموعة ج",
 }
+
+USERS = {}
 
 # ================== حفظ / تحميل ==================
 
@@ -53,51 +56,41 @@ def now():
     return int(time.time())
 
 def fmt(ts):
-    return time.strftime("%I:%M %p", time.localtime(ts))
+    return datetime.fromtimestamp(ts, TZ_EGYPT).strftime("%I:%M %p")
 
-def cleanup_old_users():
-    ts = now()
-    changed = False
+def cleanup():
+    t = now()
+    removed = False
     for uid in list(USERS.keys()):
-        if ts - USERS[uid]["start_time"] > CLEANUP_SECONDS:
+        if t - USERS[uid]["start_time"] > MEMORY_SECONDS:
             del USERS[uid]
-            changed = True
-    if changed:
+            removed = True
+    if removed:
         save_data()
 
 def build_admin_message(uid):
     u = USERS[uid]
 
-    msgs = "\n".join(
-        f"{i+1}) [{fmt(t)}] {m}"
-        for i, (t, m) in enumerate(u["messages"])
+    messages = "\n".join(
+        f"{i+1}) [{fmt(t)}] {txt}"
+        for i, (t, txt) in enumerate(u["messages"])
     )
 
-    if u.get("closed"):
-        status = "🔴 #مغلق"
-    else:
-        status = "🟢 #تم_الرد" if u["replied"] else "🟡 #لم_يتم_الرد"
+    status = "🟢 #تم_الرد" if u["replied"] else "🟡 #لم_يتم_الرد"
 
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔒 قفل الاستفسار", callback_data=f"close_{uid}")
-    ]])
-
-    return {
-        "text": (
-            "📩 استفسار طالب\n\n"
-            f"👤 الاسم: {u['name']}\n"
-            f"🔗 @{u['username'] if u['username'] else 'غير متاح'}\n"
-            f"🆔 ID: {uid}\n"
-            f"👥 {u['group']}\n\n"
-            "━━━━━━━━━━━━━━\n"
-            "📨 الرسائل:\n"
-            f"{msgs}\n"
-            "━━━━━━━━━━━━━━\n"
-            f"📌 الحالة: {status}\n\n"
-            "↩️ للرد: اعمل Reply على نفس الاستفسار"
-        ),
-        "reply_markup": keyboard
-    }
+    return (
+        "📩 استفسار طالب\n\n"
+        f"👤 الاسم: {u['name']}\n"
+        f"🔗 @{u['username'] if u['username'] else 'غير متاح'}\n"
+        f"🆔 ID: {uid}\n"
+        f"👥 {u['group']}\n\n"
+        "━━━━━━━━━━━━━━\n"
+        "📨 الرسائل:\n"
+        f"{messages}\n"
+        "━━━━━━━━━━━━━━\n"
+        f"📌 الحالة: {status}\n\n"
+        "↩️ الرد يكون Reply على الرسالة"
+    )
 
 # ================== الطالب ==================
 
@@ -106,26 +99,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     uid = update.message.from_user.id
-    ts = now()
+    t = now()
 
     USERS[uid] = {
         "name": update.message.from_user.full_name,
         "username": update.message.from_user.username,
         "group": None,
-        "start_time": ts,
+        "start_time": t,
         "messages": [],
         "admin_message_id": None,
         "replied": False,
         "reply_count": 0,
-        "calm_sent": False,
-        "closed": False,
     }
     save_data()
 
-    await update.message.reply_text("اختار مجموعتك 👇")
+    await update.message.reply_text("أهلاً بيك 👋\nاختار مجموعتك 👇")
     await send_group_buttons(update)
 
-async def send_group_buttons(update):
+async def send_group_buttons(update: Update):
     keyboard = [[
         InlineKeyboardButton("أ", callback_data="group_A"),
         InlineKeyboardButton("ب", callback_data="group_B"),
@@ -141,84 +132,78 @@ async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     uid = query.from_user.id
-    USERS[uid]["group"] = GROUP_MAP[query.data.split("_")[1]]
+    key = query.data.split("_")[1]
+
+    if uid not in USERS:
+        return
+
+    USERS[uid]["group"] = GROUP_MAP[key]
+    USERS[uid]["start_time"] = now()
     save_data()
 
-    await query.edit_message_text("تمام 👌\nابعت استفسارك.")
+    await query.edit_message_text(
+        "تمام 👌\nابعت استفسارك، ولو في صور أو ملفات ابعتها عادي."
+    )
 
 async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type != "private":
         return
 
-    cleanup_old_users()
+    cleanup()
 
     uid = update.message.from_user.id
-    ts = now()
+    t = now()
 
     if uid not in USERS:
         await start(update, context)
         return
 
-    u = USERS[uid]
-
-    if ts - u["start_time"] > WINDOW_SECONDS:
-        await start(update, context)
+    # انتهاء جلسة 4 ساعات
+    if t - USERS[uid]["start_time"] > SESSION_SECONDS:
+        USERS[uid]["group"] = None
+        USERS[uid]["messages"] = []
+        USERS[uid]["admin_message_id"] = None
+        USERS[uid]["replied"] = False
+        USERS[uid]["reply_count"] = 0
+        USERS[uid]["start_time"] = t
+        save_data()
+        await send_group_buttons(update)
         return
 
-    if u["group"] is None:
+    if USERS[uid]["group"] is None:
         await send_group_buttons(update)
         return
 
     msg = update.message
 
-    # تسجيل نص فقط في اللوج
     if msg.text:
         content = msg.text
-    elif msg.document:
-        content = f"📎 ملف: {msg.document.file_name}"
     elif msg.photo:
         content = "🖼️ صورة"
+    elif msg.document:
+        content = f"📎 ملف: {msg.document.file_name}"
     elif msg.voice:
         content = "🎤 رسالة صوتية"
     else:
         content = "📩 مرفق"
 
-    u["messages"].append((ts, content))
-    u["replied"] = False
-
-    if not u["calm_sent"] and len(u["messages"]) >= 3:
-        await update.message.reply_text(
-            "تمام 👍 وصلنا استفسارك، أول ما ييجي رد هيوصلك هنا."
-        )
-        u["calm_sent"] = True
-
+    USERS[uid]["messages"].append((t, content))
+    USERS[uid]["replied"] = False
     save_data()
 
-    payload = build_admin_message(uid)
-
-    if u["admin_message_id"] is None:
+    # إرسال أو تحديث رسالة الأدمن
+    if USERS[uid]["admin_message_id"] is None:
         sent = await context.bot.send_message(
-            chat_id=ADMIN_GROUP_ID,
-            text=payload["text"],
-            reply_markup=payload["reply_markup"]
+            ADMIN_GROUP_ID,
+            build_admin_message(uid)
         )
-        u["admin_message_id"] = sent.message_id
+        USERS[uid]["admin_message_id"] = sent.message_id
         save_data()
     else:
         await context.bot.edit_message_text(
-            chat_id=ADMIN_GROUP_ID,
-            message_id=u["admin_message_id"],
-            text=payload["text"],
-            reply_markup=payload["reply_markup"]
-        )
-
-    # ✅ إرسال المرفقات الحقيقية للأدمن (مربوطة بالاستفسار)
-    if msg.photo or msg.document or msg.voice:
-        await context.bot.copy_message(
-            chat_id=ADMIN_GROUP_ID,
-            from_chat_id=update.message.chat.id,
-            message_id=msg.message_id,
-            reply_to_message_id=u["admin_message_id"]
+            ADMIN_GROUP_ID,
+            USERS[uid]["admin_message_id"],
+            build_admin_message(uid)
         )
 
 # ================== الأدمن ==================
@@ -229,10 +214,12 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not update.message.reply_to_message:
         return
 
-    replied_to = update.message.reply_to_message.message_id
+    cleanup()
+
+    replied_id = update.message.reply_to_message.message_id
 
     for uid, u in USERS.items():
-        if u["admin_message_id"] == replied_to:
+        if u["admin_message_id"] == replied_id:
             await context.bot.copy_message(
                 chat_id=uid,
                 from_chat_id=ADMIN_GROUP_ID,
@@ -243,50 +230,19 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
             u["replied"] = True
             save_data()
 
+            if u["reply_count"] % 2 == 0:
+                await context.bot.send_message(
+                    uid, "📬 جالك رد بخصوص استفسارك 👆"
+                )
+
+            await context.bot.edit_message_text(
+                ADMIN_GROUP_ID,
+                replied_id,
+                build_admin_message(uid)
+            )
+
             await update.message.reply_text("✅ تم إرسال الرد للطالب")
             break
-
-async def close_case(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    uid = int(query.data.split("_")[1])
-
-    if uid in USERS:
-        USERS[uid]["closed"] = True
-        save_data()
-
-        payload = build_admin_message(uid)
-        await query.edit_message_text(
-            text=payload["text"],
-            reply_markup=payload["reply_markup"]
-        )
-        await query.answer("تم قفل الاستفسار 🔒")
-
-# ================== داش بورد ==================
-
-async def admin_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.chat.id != ADMIN_GROUP_ID:
-        return
-
-    cleanup_old_users()
-
-    total = len(USERS)
-    replied = sum(1 for u in USERS.values() if u.get("replied"))
-    pending = total - replied
-    closed = sum(1 for u in USERS.values() if u.get("closed"))
-
-    text = (
-        "📊 لوحة المتابعة\n\n"
-        f"📥 إجمالي الاستفسارات: {total}\n"
-        f"🟡 لم يتم الرد: {pending}\n"
-        f"🟢 تم الرد: {replied}\n"
-        f"🔴 مغلق: {closed}\n\n"
-        "🔎 استخدم التاجات:\n"
-        "#لم_يتم_الرد\n"
-        "#تم_الرد\n"
-        "#مغلق"
-    )
-
-    await update.message.reply_text(text)
 
 # ================== تشغيل ==================
 
@@ -295,23 +251,11 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(set_group, pattern="^group_"))
-    app.add_handler(CallbackQueryHandler(close_case, pattern="^close_"))
+    app.add_handler(CallbackQueryHandler(set_group))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, handle_private))
+    app.add_handler(MessageHandler(filters.ChatType.SUPERGROUP & filters.REPLY, handle_admin_reply))
 
-    app.add_handler(
-        MessageHandler(
-            filters.ChatType.GROUPS & filters.Regex(r"^(ابدا|ابدأ|start|dashboard)$"),
-            admin_dashboard
-        )
-    )
-
-    app.add_handler(
-        MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, handle_private)
-    )
-    app.add_handler(
-        MessageHandler(filters.ChatType.SUPERGROUP & filters.REPLY, handle_admin_reply)
-    )
-
+    print("Bot is running...")
     app.run_polling()
 
 if __name__ == "__main__":
