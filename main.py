@@ -35,7 +35,7 @@ GROUP_MAP = {
 
 USERS = {}
 
-# ================== أدوات وقت ==================
+# ================== أدوات الوقت ==================
 
 def now():
     return int(time.time())
@@ -43,7 +43,7 @@ def now():
 def fmt(ts):
     return datetime.fromtimestamp(ts, EGY_TZ).strftime("%I:%M %p")
 
-# ================== تخزين ==================
+# ================== التخزين ==================
 
 def load_data():
     global USERS
@@ -67,7 +67,7 @@ def cleanup():
     if changed:
         save_data()
 
-# ================== بناء رسالة الأدمن ==================
+# ================== رسالة الأدمن ==================
 
 def build_admin_message(uid):
     u = USERS[uid]
@@ -193,7 +193,6 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     USERS[uid]["replied"] = False
     save_data()
 
-    # إنشاء رسالة الأساس مرة واحدة
     if USERS[uid]["admin_root"] is None:
         root = await context.bot.send_message(
             chat_id=ADMIN_GROUP_ID,
@@ -202,13 +201,13 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
         USERS[uid]["admin_root"] = root.message_id
         save_data()
 
-    # إرسال المحتوى Reply على رسالة الأساس
     reply_to = USERS[uid]["admin_root"]
 
+    # ====== إرسال المحتوى (مُحسّن) ======
     if msg.text:
         await context.bot.send_message(
             chat_id=ADMIN_GROUP_ID,
-            text=msg.text,
+            text=f"📝 رسالة من الطالب:\n\n{msg.text}",
             reply_to_message_id=reply_to,
         )
     elif msg.photo:
@@ -222,14 +221,14 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_document(
             chat_id=ADMIN_GROUP_ID,
             document=msg.document.file_id,
-            caption=msg.document.file_name,
+            caption=f"📎 ملف من الطالب: {msg.document.file_name}",
             reply_to_message_id=reply_to,
         )
     elif msg.voice:
         await context.bot.send_voice(
             chat_id=ADMIN_GROUP_ID,
             voice=msg.voice.file_id,
-            caption="🎤 رسالة صوتية",
+            caption="🎤 رسالة صوتية من الطالب",
             reply_to_message_id=reply_to,
         )
 
@@ -289,6 +288,14 @@ async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🟡 لم يتم الرد: {pending}"
     )
 
+async def dashboard_trigger(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.chat.id != ADMIN_GROUP_ID:
+        return
+
+    text = update.message.text.strip().lower()
+    if text in ["start", "ابدا", "ابدأ", "dashboard", "داش بورد"]:
+        await dashboard(update, context)
+
 # ================== تشغيل ==================
 
 def main():
@@ -298,6 +305,10 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("dashboard", dashboard))
     app.add_handler(CallbackQueryHandler(set_group))
+
+    app.add_handler(
+        MessageHandler(filters.ChatType.SUPERGROUP & filters.TEXT & ~filters.COMMAND, dashboard_trigger)
+    )
     app.add_handler(
         MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, handle_private)
     )
