@@ -60,21 +60,16 @@ def fmt(ts):
 
 def cleanup():
     t = now()
-    removed = False
+    changed = False
     for uid in list(USERS.keys()):
         if t - USERS[uid]["start_time"] > MEMORY_SECONDS:
             del USERS[uid]
-            removed = True
-    if removed:
+            changed = True
+    if changed:
         save_data()
 
 def build_admin_message(uid):
     u = USERS[uid]
-
-    messages = "\n".join(
-        f"{i+1}) [{fmt(t)}] {txt}"
-        for i, (t, txt) in enumerate(u["messages"])
-    )
 
     status = "🟢 #تم_الرد" if u["replied"] else "🟡 #لم_يتم_الرد"
 
@@ -84,12 +79,9 @@ def build_admin_message(uid):
         f"🔗 @{u['username'] if u['username'] else 'غير متاح'}\n"
         f"🆔 ID: {uid}\n"
         f"👥 {u['group']}\n\n"
-        "━━━━━━━━━━━━━━\n"
-        "📨 الرسائل:\n"
-        f"{messages}\n"
-        "━━━━━━━━━━━━━━\n"
-        f"📌 الحالة: {status}\n\n"
-        "↩️ الرد يكون Reply على الرسالة"
+        f"📌 الحالة الحالية: {status}\n\n"
+        "↩️ الرد يكون Reply على هذه الرسالة فقط\n"
+        "📎 أي رسالة من الطالب بعدها هتظهر Reply هنا تلقائيًا"
     )
 
 # ================== الطالب ==================
@@ -99,17 +91,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     uid = update.message.from_user.id
-    t = now()
-
     USERS[uid] = {
         "name": update.message.from_user.full_name,
         "username": update.message.from_user.username,
         "group": None,
-        "start_time": t,
-        "messages": [],
+        "start_time": now(),
         "admin_message_id": None,
         "replied": False,
-        "reply_count": 0,
     }
     save_data()
 
@@ -139,10 +127,11 @@ async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     USERS[uid]["group"] = GROUP_MAP[key]
     USERS[uid]["start_time"] = now()
+    USERS[uid]["replied"] = False
     save_data()
 
     await query.edit_message_text(
-        "تمام 👌\nابعت استفسارك، ولو في صور أو ملفات ابعتها عادي."
+        "تمام 👌\nابعت استفسارك (نص / صورة / ملف) وهيوصل فورًا."
     )
 
 async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -158,13 +147,10 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start(update, context)
         return
 
-    # انتهاء جلسة 4 ساعات
     if t - USERS[uid]["start_time"] > SESSION_SECONDS:
         USERS[uid]["group"] = None
-        USERS[uid]["messages"] = []
         USERS[uid]["admin_message_id"] = None
         USERS[uid]["replied"] = False
-        USERS[uid]["reply_count"] = 0
         USERS[uid]["start_time"] = t
         save_data()
         await send_group_buttons(update)
@@ -176,35 +162,26 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = update.message
 
-    if msg.text:
-        content = msg.text
-    elif msg.photo:
-        content = "🖼️ صورة"
-    elif msg.document:
-        content = f"📎 ملف: {msg.document.file_name}"
-    elif msg.voice:
-        content = "🎤 رسالة صوتية"
-    else:
-        content = "📩 مرفق"
-
-    USERS[uid]["messages"].append((t, content))
-    USERS[uid]["replied"] = False
-    save_data()
-
-    # إرسال أو تحديث رسالة الأدمن
+    # أول رسالة = إنشاء استفسار
     if USERS[uid]["admin_message_id"] is None:
         sent = await context.bot.send_message(
             ADMIN_GROUP_ID,
             build_admin_message(uid)
         )
         USERS[uid]["admin_message_id"] = sent.message_id
+        USERS[uid]["replied"] = False
         save_data()
-    else:
-        await context.bot.edit_message_text(
-            ADMIN_GROUP_ID,
-            USERS[uid]["admin_message_id"],
-            build_admin_message(uid)
-        )
+
+    # أي رسالة بعدها = Reply على رسالة الاستفسار
+    await context.bot.copy_message(
+        chat_id=ADMIN_GROUP_ID,
+        from_chat_id=update.message.chat.id,
+        message_id=msg.message_id,
+        reply_to_message_id=USERS[uid]["admin_message_id"]
+    )
+
+    USERS[uid]["replied"] = False
+    save_data()
 
 # ================== الأدمن ==================
 
@@ -214,35 +191,28 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not update.message.reply_to_message:
         return
 
-    cleanup()
+    base_text = update.message.reply_to_message.text
+    if not base_text or "🆔 ID:" not in base_text:
+        return
 
-    replied_id = update.message.reply_to_message.message_id
+    try:
+        uid = int(base_text.split("🆔 ID:")[1].split("\n")[0].strip())
+    except:
+        return
 
-    for uid, u in USERS.items():
-        if u["admin_message_id"] == replied_id:
-            await context.bot.copy_message(
-                chat_id=uid,
-                from_chat_id=ADMIN_GROUP_ID,
-                message_id=update.message.message_id,
-            )
+    if uid not in USERS:
+        return
 
-            u["reply_count"] += 1
-            u["replied"] = True
-            save_data()
+    await context.bot.copy_message(
+        chat_id=uid,
+        from_chat_id=ADMIN_GROUP_ID,
+        message_id=update.message.message_id,
+    )
 
-            if u["reply_count"] % 2 == 0:
-                await context.bot.send_message(
-                    uid, "📬 جالك رد بخصوص استفسارك 👆"
-                )
+    USERS[uid]["replied"] = True
+    save_data()
 
-            await context.bot.edit_message_text(
-                ADMIN_GROUP_ID,
-                replied_id,
-                build_admin_message(uid)
-            )
-
-            await update.message.reply_text("✅ تم إرسال الرد للطالب")
-            break
+    await update.message.reply_text("✅ تم إرسال الرد للطالب")
 
 # ================== تشغيل ==================
 
@@ -252,8 +222,12 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(set_group))
-    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, handle_private))
-    app.add_handler(MessageHandler(filters.ChatType.SUPERGROUP & filters.REPLY, handle_admin_reply))
+    app.add_handler(
+        MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, handle_private)
+    )
+    app.add_handler(
+        MessageHandler(filters.ChatType.SUPERGROUP & filters.REPLY, handle_admin_reply)
+    )
 
     print("Bot is running...")
     app.run_polling()
