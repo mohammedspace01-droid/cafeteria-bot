@@ -21,8 +21,8 @@ from telegram.ext import (
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_GROUP_ID = -1003593388052
 
-SESSION_SECONDS = 4 * 60 * 60          # 4 ساعات استفسار
-USER_LIFETIME = 48 * 60 * 60           # 48 ساعة تخزين
+SESSION_SECONDS = 4 * 60 * 60          # 4 ساعات
+USER_LIFETIME = 48 * 60 * 60           # 48 ساعة
 DATA_FILE = "data.json"
 
 EGY_TZ = timezone(timedelta(hours=2))
@@ -193,6 +193,7 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     USERS[uid]["replied"] = False
     save_data()
 
+    # رسالة الجذر
     if USERS[uid]["admin_root"] is None:
         root = await context.bot.send_message(
             chat_id=ADMIN_GROUP_ID,
@@ -203,7 +204,7 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply_to = USERS[uid]["admin_root"]
 
-    # ====== إرسال المحتوى (مُحسّن) ======
+    # إرسال المحتوى
     if msg.text:
         await context.bot.send_message(
             chat_id=ADMIN_GROUP_ID,
@@ -248,10 +249,15 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     cleanup()
 
-    replied_id = update.message.reply_to_message.message_id
-
     for uid, u in USERS.items():
-        if u["admin_root"] == replied_id or replied_id > u["admin_root"]:
+        root_id = u["admin_root"]
+        msg = update.message.reply_to_message
+
+        # نطلع لأصل الـ Thread
+        while msg.reply_to_message:
+            msg = msg.reply_to_message
+
+        if msg.message_id == root_id:
             await context.bot.copy_message(
                 chat_id=uid,
                 from_chat_id=ADMIN_GROUP_ID,
@@ -264,7 +270,7 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
             await context.bot.edit_message_text(
                 chat_id=ADMIN_GROUP_ID,
-                message_id=u["admin_root"],
+                message_id=root_id,
                 text=build_admin_message(uid),
             )
 
