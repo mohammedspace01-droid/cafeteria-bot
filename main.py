@@ -191,7 +191,6 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     USERS[uid]["replied"] = False
     save_data()
 
-    # إرسال أو تحديث رسالة الأدمن
     if USERS[uid]["admin_message_id"] is None:
         sent = await context.bot.send_message(
             ADMIN_GROUP_ID,
@@ -216,33 +215,43 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     cleanup()
 
-    replied_id = update.message.reply_to_message.message_id
+    text = update.message.reply_to_message.text
+    if not text or "🆔 ID:" not in text:
+        return
 
-    for uid, u in USERS.items():
-        if u["admin_message_id"] == replied_id:
-            await context.bot.copy_message(
-                chat_id=uid,
-                from_chat_id=ADMIN_GROUP_ID,
-                message_id=update.message.message_id,
-            )
+    try:
+        uid = int(text.split("🆔 ID:")[1].split("\n")[0].strip())
+    except:
+        return
 
-            u["reply_count"] += 1
-            u["replied"] = True
-            save_data()
+    if uid not in USERS:
+        return
 
-            if u["reply_count"] % 2 == 0:
-                await context.bot.send_message(
-                    uid, "📬 جالك رد بخصوص استفسارك 👆"
-                )
+    u = USERS[uid]
 
-            await context.bot.edit_message_text(
-                ADMIN_GROUP_ID,
-                replied_id,
-                build_admin_message(uid)
-            )
+    await context.bot.copy_message(
+        chat_id=uid,
+        from_chat_id=ADMIN_GROUP_ID,
+        message_id=update.message.message_id,
+    )
 
-            await update.message.reply_text("✅ تم إرسال الرد للطالب")
-            break
+    u["reply_count"] += 1
+    u["replied"] = True
+    save_data()
+
+    if u["reply_count"] % 2 == 0:
+        await context.bot.send_message(
+            uid, "📬 جالك رد بخصوص استفسارك 👆"
+        )
+
+    if u["admin_message_id"]:
+        await context.bot.edit_message_text(
+            ADMIN_GROUP_ID,
+            u["admin_message_id"],
+            build_admin_message(uid)
+        )
+
+    await update.message.reply_text("✅ تم إرسال الرد للطالب")
 
 # ================== تشغيل ==================
 
