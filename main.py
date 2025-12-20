@@ -71,7 +71,7 @@ def cleanup():
 def build_admin_message(uid):
     u = USERS[uid]
 
-    messages = "\n".join(
+    msgs = "\n".join(
         f"{i+1}) [{fmt(t)}] {txt}"
         for i, (t, txt) in enumerate(u["messages"])
     )
@@ -86,7 +86,7 @@ def build_admin_message(uid):
         f"👥 {u['group']}\n\n"
         "━━━━━━━━━━━━━━\n"
         "📨 الرسائل:\n"
-        f"{messages}\n"
+        f"{msgs}\n"
         "━━━━━━━━━━━━━━\n"
         f"📌 الحالة: {status}\n\n"
         "↩️ الرد يكون Reply على الرسالة"
@@ -99,13 +99,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     uid = update.message.from_user.id
-    t = now()
-
     USERS[uid] = {
         "name": update.message.from_user.full_name,
         "username": update.message.from_user.username,
         "group": None,
-        "start_time": t,
+        "start_time": now(),
         "messages": [],
         "admin_message_id": None,
         "replied": False,
@@ -158,7 +156,6 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start(update, context)
         return
 
-    # انتهاء جلسة 4 ساعات
     if t - USERS[uid]["start_time"] > SESSION_SECONDS:
         USERS[uid]["group"] = None
         USERS[uid]["messages"] = []
@@ -205,6 +202,15 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
             build_admin_message(uid)
         )
 
+    # إرسال المرفق فعليًا للأدمن
+    if msg.photo or msg.document or msg.voice:
+        await context.bot.copy_message(
+            chat_id=ADMIN_GROUP_ID,
+            from_chat_id=update.message.chat.id,
+            message_id=msg.message_id,
+            reply_to_message_id=USERS[uid]["admin_message_id"]
+        )
+
 # ================== الأدمن ==================
 
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -215,7 +221,8 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     cleanup()
 
-    text = update.message.reply_to_message.text
+    reply_msg = update.message.reply_to_message
+    text = reply_msg.text or reply_msg.caption
     if not text or "🆔 ID:" not in text:
         return
 
@@ -240,9 +247,7 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     save_data()
 
     if u["reply_count"] % 2 == 0:
-        await context.bot.send_message(
-            uid, "📬 جالك رد بخصوص استفسارك 👆"
-        )
+        await context.bot.send_message(uid, "📬 جالك رد بخصوص استفسارك 👆")
 
     if u["admin_message_id"]:
         await context.bot.edit_message_text(
