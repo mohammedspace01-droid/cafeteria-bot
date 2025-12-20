@@ -1,7 +1,12 @@
 import os
 import time
 import json
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from datetime import datetime, timezone, timedelta
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
@@ -11,16 +16,16 @@ from telegram.ext import (
     filters,
 )
 
-# ================== إعدادات ==================
+# ================== الإعدادات ==================
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_GROUP_ID = -1003593388052
 
-WINDOW_SECONDS = 4 * 60 * 60        # 4 ساعات سيشن
-CLEANUP_SECONDS = 48 * 60 * 60      # حذف بعد يومين
+SESSION_SECONDS = 4 * 60 * 60          # 4 ساعات استفسار
+USER_LIFETIME = 48 * 60 * 60           # 48 ساعة تخزين
 DATA_FILE = "data.json"
 
-USERS = {}
+EGY_TZ = timezone(timedelta(hours=2))
 
 GROUP_MAP = {
     "A": "المجموعة أ",
@@ -28,9 +33,17 @@ GROUP_MAP = {
     "C": "المجموعة ج",
 }
 
-EGYPT_OFFSET = 2 * 60 * 60  # توقيت مصر
+USERS = {}
 
-# ================== حفظ / تحميل ==================
+# ================== أدوات وقت ==================
+
+def now():
+    return int(time.time())
+
+def fmt(ts):
+    return datetime.fromtimestamp(ts, EGY_TZ).strftime("%I:%M %p")
+
+# ================== تخزين ==================
 
 def load_data():
     global USERS
@@ -44,23 +57,17 @@ def save_data():
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(USERS, f, ensure_ascii=False, indent=2)
 
-# ================== أدوات ==================
-
-def now():
-    return int(time.time())
-
-def fmt(ts):
-    return time.strftime("%I:%M %p", time.localtime(ts + EGYPT_OFFSET))
-
-def cleanup_old_users():
-    t = now()
-    removed = False
+def cleanup():
+    now_ts = now()
+    changed = False
     for uid in list(USERS.keys()):
-        if t - USERS[uid]["start_time"] > CLEANUP_SECONDS:
+        if now_ts - USERS[uid]["created_at"] > USER_LIFETIME:
             del USERS[uid]
-            removed = True
-    if removed:
+            changed = True
+    if changed:
         save_data()
+
+# ================== بناء رسالة الأدمن ==================
 
 def build_admin_message(uid):
     u = USERS[uid]
@@ -68,14 +75,14 @@ def build_admin_message(uid):
     msgs = "\n".join(
         f"{i+1}) [{fmt(t)}] {m}"
         for i, (t, m) in enumerate(u["messages"])
-    )
+    ) or "—"
 
     status = "🟢 #تم_الرد" if u["replied"] else "🟡 #لم_يتم_الرد"
 
     return (
         "📩 استفسار طالب\n\n"
         f"👤 الاسم: {u['name']}\n"
-        f"🔗 @{u['username'] if u['username'] else 'غير متاح'}\n"
+        f"🔗 @{u['username'] or 'غير متاح'}\n"
         f"🆔 ID: {uid}\n"
         f"👥 {u['group']}\n\n"
         "━━━━━━━━━━━━━━\n"
@@ -83,7 +90,7 @@ def build_admin_message(uid):
         f"{msgs}\n"
         "━━━━━━━━━━━━━━\n"
         f"📌 الحالة: {status}\n\n"
-        "↩️ الرد يكون Reply داخل نفس الاستفسار"
+        "↩️ الرد يكون Reply على أي رسالة داخل الاستفسار"
     )
 
 # ================== الطالب ==================
@@ -95,33 +102,34 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     ts = now()
 
-    if uid not in USERS or ts - USERS[uid]["start_time"] > WINDOW_SECONDS:
+    if uid not in USERS or ts - USERS[uid]["session_start"] > SESSION_SECONDS:
         USERS[uid] = {
             "name": update.message.from_user.full_name,
             "username": update.message.from_user.username,
             "group": None,
-            "start_time": ts,
             "messages": [],
-            "admin_message_id": None,
+            "admin_root": None,
             "replied": False,
+            "reply_count": 0,
+            "session_start": ts,
+            "created_at": ts,
         }
         save_data()
 
-        await update.message.reply_text("أهلاً بيك 👋\nاختار مجموعتك 👇")
+        await update.message.reply_text("اختار مجموعتك 👇")
         await send_group_buttons(update)
-        return
+    else:
+        await update.message.reply_text("ابعت استفسارك مباشرة 👇")
 
-    await update.message.reply_text("ابعت استفسارك مباشرة 👌")
-
-async def send_group_buttons(update: Update):
-    keyboard = [[
+async def send_group_buttons(update):
+    kb = [[
         InlineKeyboardButton("أ", callback_data="group_A"),
         InlineKeyboardButton("ب", callback_data="group_B"),
         InlineKeyboardButton("ج", callback_data="group_C"),
     ]]
     await update.message.reply_text(
         "اختار مجموعتك:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        reply_markup=InlineKeyboardMarkup(kb),
     )
 
 async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -135,16 +143,16 @@ async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     USERS[uid]["group"] = GROUP_MAP[key]
-    USERS[uid]["start_time"] = now()
+    USERS[uid]["session_start"] = now()
     save_data()
 
-    await query.edit_message_text("تمام 👌\nابعت استفسارك.")
+    await query.edit_message_text("تمام 👌 ابعت استفسارك.")
 
 async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type != "private":
         return
 
-    cleanup_old_users()
+    cleanup()
 
     uid = update.message.from_user.id
     ts = now()
@@ -153,12 +161,13 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start(update, context)
         return
 
-    if ts - USERS[uid]["start_time"] > WINDOW_SECONDS:
+    if ts - USERS[uid]["session_start"] > SESSION_SECONDS:
         USERS[uid]["group"] = None
         USERS[uid]["messages"] = []
-        USERS[uid]["admin_message_id"] = None
+        USERS[uid]["admin_root"] = None
         USERS[uid]["replied"] = False
-        USERS[uid]["start_time"] = ts
+        USERS[uid]["reply_count"] = 0
+        USERS[uid]["session_start"] = ts
         save_data()
 
         await send_group_buttons(update)
@@ -169,46 +178,68 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = update.message
+    label = "📩 مرفق"
 
     if msg.text:
-        content = msg.text
-    elif msg.document:
-        content = f"📎 {msg.document.file_name}"
+        label = msg.text
     elif msg.photo:
-        content = "🖼️ صورة"
+        label = "🖼️ صورة"
+    elif msg.document:
+        label = f"📎 {msg.document.file_name}"
     elif msg.voice:
-        content = "🎤 رسالة صوتية"
-    else:
-        content = "📩 مرفق"
+        label = "🎤 رسالة صوتية"
 
-    USERS[uid]["messages"].append((ts, content))
+    USERS[uid]["messages"].append((ts, label))
     USERS[uid]["replied"] = False
     save_data()
 
-    if USERS[uid]["admin_message_id"] is None:
-        sent = await context.bot.send_message(
+    # إنشاء رسالة الأساس مرة واحدة
+    if USERS[uid]["admin_root"] is None:
+        root = await context.bot.send_message(
             chat_id=ADMIN_GROUP_ID,
             text=build_admin_message(uid),
         )
-        USERS[uid]["admin_message_id"] = sent.message_id
+        USERS[uid]["admin_root"] = root.message_id
         save_data()
-    else:
-        await context.bot.edit_message_text(
+
+    # إرسال المحتوى Reply على رسالة الأساس
+    reply_to = USERS[uid]["admin_root"]
+
+    if msg.text:
+        await context.bot.send_message(
             chat_id=ADMIN_GROUP_ID,
-            message_id=USERS[uid]["admin_message_id"],
-            text=build_admin_message(uid),
+            text=msg.text,
+            reply_to_message_id=reply_to,
+        )
+    elif msg.photo:
+        await context.bot.send_photo(
+            chat_id=ADMIN_GROUP_ID,
+            photo=msg.photo[-1].file_id,
+            caption="🖼️ صورة من الطالب",
+            reply_to_message_id=reply_to,
+        )
+    elif msg.document:
+        await context.bot.send_document(
+            chat_id=ADMIN_GROUP_ID,
+            document=msg.document.file_id,
+            caption=msg.document.file_name,
+            reply_to_message_id=reply_to,
+        )
+    elif msg.voice:
+        await context.bot.send_voice(
+            chat_id=ADMIN_GROUP_ID,
+            voice=msg.voice.file_id,
+            caption="🎤 رسالة صوتية",
+            reply_to_message_id=reply_to,
         )
 
-    # إرسال المرفق نفسه للجروب
-    if not msg.text:
-        await context.bot.copy_message(
-            chat_id=ADMIN_GROUP_ID,
-            from_chat_id=uid,
-            message_id=msg.message_id,
-            reply_to_message_id=USERS[uid]["admin_message_id"],
-        )
+    await context.bot.edit_message_text(
+        chat_id=ADMIN_GROUP_ID,
+        message_id=reply_to,
+        text=build_admin_message(uid),
+    )
 
-# ================== الأدمن ==================
+# ================== رد الأدمن ==================
 
 async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.id != ADMIN_GROUP_ID:
@@ -216,47 +247,56 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not update.message.reply_to_message:
         return
 
-    # نمشي في سلسلة الـ reply لحد رسالة الاستفسار الأساسية
-    base = update.message.reply_to_message
-    while base.reply_to_message:
-        base = base.reply_to_message
+    cleanup()
 
-    if not base.text or "🆔 ID:" not in base.text:
+    replied_id = update.message.reply_to_message.message_id
+
+    for uid, u in USERS.items():
+        if u["admin_root"] == replied_id or replied_id > u["admin_root"]:
+            await context.bot.copy_message(
+                chat_id=uid,
+                from_chat_id=ADMIN_GROUP_ID,
+                message_id=update.message.message_id,
+            )
+
+            u["reply_count"] += 1
+            u["replied"] = True
+            save_data()
+
+            await context.bot.edit_message_text(
+                chat_id=ADMIN_GROUP_ID,
+                message_id=u["admin_root"],
+                text=build_admin_message(uid),
+            )
+
+            await update.message.reply_text("✅ تم إرسال الرد للطالب")
+            break
+
+# ================== داش بورد ==================
+
+async def dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.chat.id != ADMIN_GROUP_ID:
         return
 
-    try:
-        uid = int(base.text.split("🆔 ID:")[1].split("\n")[0].strip())
-    except:
-        return
+    total = len(USERS)
+    done = sum(1 for u in USERS.values() if u["replied"])
+    pending = total - done
 
-    if uid not in USERS:
-        return
-
-    await context.bot.copy_message(
-        chat_id=uid,
-        from_chat_id=ADMIN_GROUP_ID,
-        message_id=update.message.message_id,
-    )
-
-    USERS[uid]["replied"] = True
-    save_data()
-
-    await update.message.reply_text("✅ تم إرسال الرد للطالب")
-
-    await context.bot.edit_message_text(
-        chat_id=ADMIN_GROUP_ID,
-        message_id=USERS[uid]["admin_message_id"],
-        text=build_admin_message(uid),
+    await update.message.reply_text(
+        "📊 داش بورد\n\n"
+        f"📨 إجمالي الاستفسارات: {total}\n"
+        f"🟢 تم الرد: {done}\n"
+        f"🟡 لم يتم الرد: {pending}"
     )
 
 # ================== تشغيل ==================
 
 def main():
     load_data()
-    print("Bot is running...")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("dashboard", dashboard))
     app.add_handler(CallbackQueryHandler(set_group))
     app.add_handler(
         MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, handle_private)
