@@ -16,7 +16,7 @@ from telegram.ext import (
     filters,
 )
 
-# ================== الإعدادات ==================
+# ================== إعدادات ==================
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_GROUP_ID = -1003593388052
@@ -89,7 +89,7 @@ def build_admin_message(uid):
         f"{msgs}\n"
         "━━━━━━━━━━━━━━\n"
         f"📌 الحالة: {status}\n\n"
-        "↩️ الرد يكون Reply على الرسالة"
+        "↩️ الرد يكون Reply على هذه الرسالة فقط"
     )
 
 # ================== الطالب ==================
@@ -156,6 +156,7 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start(update, context)
         return
 
+    # انتهاء جلسة 4 ساعات
     if t - USERS[uid]["start_time"] > SESSION_SECONDS:
         USERS[uid]["group"] = None
         USERS[uid]["messages"] = []
@@ -188,6 +189,7 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     USERS[uid]["replied"] = False
     save_data()
 
+    # إرسال / تحديث رسالة الاستفسار الأساسية
     if USERS[uid]["admin_message_id"] is None:
         sent = await context.bot.send_message(
             ADMIN_GROUP_ID,
@@ -202,13 +204,12 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
             build_admin_message(uid)
         )
 
-    # إرسال المرفق فعليًا للأدمن
+    # إرسال المرفقات للأدمن بدون Reply
     if msg.photo or msg.document or msg.voice:
         await context.bot.copy_message(
             chat_id=ADMIN_GROUP_ID,
             from_chat_id=update.message.chat.id,
-            message_id=msg.message_id,
-            reply_to_message_id=USERS[uid]["admin_message_id"]
+            message_id=msg.message_id
         )
 
 # ================== الأدمن ==================
@@ -222,12 +223,16 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     cleanup()
 
     reply_msg = update.message.reply_to_message
-    text = reply_msg.text or reply_msg.caption
-    if not text or "🆔 ID:" not in text:
+    base_text = reply_msg.text or reply_msg.caption
+
+    # لازم يكون Reply على رسالة الاستفسار الأساسية فقط
+    if not base_text:
+        return
+    if "📩 استفسار طالب" not in base_text or "🆔 ID:" not in base_text:
         return
 
     try:
-        uid = int(text.split("🆔 ID:")[1].split("\n")[0].strip())
+        uid = int(base_text.split("🆔 ID:")[1].split("\n")[0].strip())
     except:
         return
 
@@ -236,6 +241,7 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     u = USERS[uid]
 
+    # إرسال الرد للطالب (نص / صورة / ملف)
     await context.bot.copy_message(
         chat_id=uid,
         from_chat_id=ADMIN_GROUP_ID,
@@ -247,8 +253,11 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
     save_data()
 
     if u["reply_count"] % 2 == 0:
-        await context.bot.send_message(uid, "📬 جالك رد بخصوص استفسارك 👆")
+        await context.bot.send_message(
+            uid, "📬 جالك رد بخصوص استفسارك 👆"
+        )
 
+    # تحديث حالة الرسالة الأساسية فقط
     if u["admin_message_id"]:
         await context.bot.edit_message_text(
             ADMIN_GROUP_ID,
@@ -266,8 +275,12 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(set_group))
-    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, handle_private))
-    app.add_handler(MessageHandler(filters.ChatType.SUPERGROUP & filters.REPLY, handle_admin_reply))
+    app.add_handler(
+        MessageHandler(filters.ChatType.PRIVATE & ~filters.COMMAND, handle_private)
+    )
+    app.add_handler(
+        MessageHandler(filters.ChatType.SUPERGROUP & filters.REPLY, handle_admin_reply)
+    )
 
     print("Bot is running...")
     app.run_polling()
