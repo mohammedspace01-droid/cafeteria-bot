@@ -19,7 +19,7 @@ from telegram.ext import (
 # ================== الإعدادات ==================
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_GROUP_ID = -1003593388052
+ADMIN_GROUP_ID = int(os.environ.get("ADMIN_GROUP_ID", "-100123456789"))
 
 SESSION_SECONDS = 4 * 60 * 60          # 4 ساعات استفسار
 USER_LIFETIME = 48 * 60 * 60           # 48 ساعة تخزين
